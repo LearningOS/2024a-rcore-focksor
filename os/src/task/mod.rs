@@ -14,9 +14,12 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+use crate::syscall::TaskInfo;
+
 use crate::config::MAX_APP_NUM;
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
+use crate::timer::get_time_ms;
 use lazy_static::*;
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
@@ -51,10 +54,7 @@ lazy_static! {
     /// Global variable: TASK_MANAGER
     pub static ref TASK_MANAGER: TaskManager = {
         let num_app = get_num_app();
-        let mut tasks = [TaskControlBlock {
-            task_cx: TaskContext::zero_init(),
-            task_status: TaskStatus::UnInit,
-        }; MAX_APP_NUM];
+        let mut tasks = [TaskControlBlock::new(); MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
             task.task_status = TaskStatus::Ready;
@@ -88,6 +88,16 @@ impl TaskManager {
             __switch(&mut _unused as *mut TaskContext, next_task_cx_ptr);
         }
         panic!("unreachable in run_first_task!");
+    }
+
+    /// increase syscall times on this task and record the timestamp of the first time
+    fn record_task_syscall(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        if inner.tasks[current].task_info.time == 0 {
+            inner.tasks[current].task_info.time = get_time_ms();
+        }
+        inner.tasks[current].task_info.syscall_times[syscall_id] += 1;
     }
 
     /// Change the status of current `Running` task into `Ready`.
@@ -168,4 +178,21 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+/// increase syscall times on this task and record the timestamp of the first time
+pub fn record_task_syscall(syscall_id: usize) {
+    TASK_MANAGER.record_task_syscall(syscall_id);
+}
+
+/// get the info of the current task
+pub fn get_task_info() -> TaskInfo {
+    let inner = TASK_MANAGER.inner.exclusive_access();
+    let current_task_info = &inner.tasks[inner.current_task].task_info;
+    TaskInfo {
+        status: inner.tasks[inner.current_task].task_status,
+        syscall_times: current_task_info.syscall_times,
+        // the time we record here is the timestamp when the task do first syscall, so need to transfer it to the time passed.
+        time: get_time_ms() - current_task_info.time
+    }
 }
