@@ -2,8 +2,8 @@
 use core::mem::size_of;
 
 use crate::{
-    config::MAX_SYSCALL_NUM, mm::translated_byte_buffer, task::{
-        change_program_brk, current_user_token, exit_current_and_run_next, suspend_current_and_run_next, TaskStatus
+    config::MAX_SYSCALL_NUM, mm::write_data_to_user_space, task::{
+        get_task_info, change_program_brk, current_user_token, exit_current_and_run_next, suspend_current_and_run_next, TaskStatus
     }, timer::get_time_us
 };
 
@@ -16,13 +16,14 @@ pub struct TimeVal {
 
 /// Task information
 #[allow(dead_code)]
+#[derive(Copy, Clone)]
 pub struct TaskInfo {
     /// Task status in it's life cycle
-    status: TaskStatus,
+    pub status: TaskStatus,
     /// The numbers of syscall called by task
-    syscall_times: [u32; MAX_SYSCALL_NUM],
+    pub syscall_times: [u32; MAX_SYSCALL_NUM],
     /// Total running time of task
-    time: usize,
+    pub time: usize,
 }
 
 /// task exits and submit an exit code
@@ -45,24 +46,13 @@ pub fn sys_yield() -> isize {
 pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
     trace!("kernel: sys_get_time");
     let us = get_time_us();
-    let mut ts = TimeVal {
+    let ts = TimeVal {
         sec: us / 1_000_000,
         usec: us % 1_000_000,
     };
-    let mut user_space_ts = translated_byte_buffer(
-        current_user_token(), _ts as *const u8, size_of::<TimeVal>());
-    let ts_result_in_bytes = unsafe {
-        core::slice::from_raw_parts_mut(&mut ts as *mut TimeVal as *mut u8, size_of::<TimeVal>())
-    };
-
-    assert!(user_space_ts.iter().map(|v| v.len()).sum::<usize>() == ts_result_in_bytes.len());
-
-    // 将ts_result_in_bytes写入到user_space_ts中
-    for (i, v_node) in user_space_ts.iter_mut().enumerate() {
-        for (j, byte) in v_node.iter_mut().enumerate() {
-            *byte = ts_result_in_bytes[i + j];
-        }
-    }
+    write_data_to_user_space(
+        current_user_token(), _ts as *const u8, 
+        &ts as *const TimeVal as *const u8, size_of::<TimeVal>());
     0
 }
 
@@ -71,7 +61,10 @@ pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
 /// HINT: What if [`TaskInfo`] is splitted by two pages ?
 pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
     trace!("kernel: sys_task_info NOT IMPLEMENTED YET!");
-    -1
+    let info = get_task_info();
+    write_data_to_user_space(current_user_token(), _ti as *const u8, 
+    &info as *const TaskInfo as *const u8, size_of::<TaskInfo>());
+    0
 }
 
 // YOUR JOB: Implement mmap.
