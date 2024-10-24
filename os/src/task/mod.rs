@@ -240,3 +240,10 @@ pub fn current_task_insert_framed_area(start_va: VirtAddr, end_va: VirtAddr, per
     let current = inner.current_task;
     inner.tasks[current].memory_set.insert_framed_area(start_va, end_va, permission);
 }
+
+/// remove framed area from current user space.
+pub fn current_task_remove_framed_area(start_va: VirtAddr, end_va: VirtAddr) {
+    let mut inner = TASK_MANAGER.inner.exclusive_access();
+    let current = inner.current_task;
+    inner.tasks[current].memory_set.remove_framed_area(start_va, end_va);
+}
