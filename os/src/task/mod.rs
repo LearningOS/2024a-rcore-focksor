@@ -14,6 +14,7 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+use crate::mm::{MapPermission, VirtAddr};
 use crate::timer::get_time_ms;
 use crate::syscall::TaskInfo;
 
@@ -231,4 +232,11 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// insert framed area to current user space.
+pub fn current_task_insert_framed_area(start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) {
+    let mut inner = TASK_MANAGER.inner.exclusive_access();
+    let current = inner.current_task;
+    inner.tasks[current].memory_set.insert_framed_area(start_va, end_va, permission);
 }
