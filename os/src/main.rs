@@ -100,6 +100,7 @@ pub fn rust_main() -> ! {
     clear_bss();
     kernel_log_info();
     mm::init();
+    // 现在内核地址空间已激活
     println!("[kernel] back to world!");
     mm::remap_test();
     trap::init();

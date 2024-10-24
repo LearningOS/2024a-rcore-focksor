@@ -224,6 +224,7 @@ impl MemorySet {
     /// Change page table by writing satp CSR Register.
     pub fn activate(&self) {
         let satp = self.page_table.token();
+        // satp mode设置为8（开启SV39分页），PPN设置为self.page_table.root_ppn
         unsafe {
             satp::write(satp);
             asm!("sfence.vma");

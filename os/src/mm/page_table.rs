@@ -171,3 +171,18 @@ pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&
     }
     v
 }
+
+/// write data from kernel space to user space
+pub fn write_data_to_user_space(token: usize, ptr: *const u8, data: *const u8, len: usize) {
+    let mut user_space_buffer = translated_byte_buffer(token, ptr, len);
+    let data = unsafe {
+        core::slice::from_raw_parts(data, len)
+    };
+    assert!(user_space_buffer.iter().map(|v| v.len()).sum::<usize>() == len);
+
+    for (i, chunk) in user_space_buffer.iter_mut().enumerate() {
+        for (j, byte) in chunk.iter_mut().enumerate() {
+            *byte = data[i + j];
+        }
+    }
+}
