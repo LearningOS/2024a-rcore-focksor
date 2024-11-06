@@ -7,7 +7,10 @@
 use super::__switch;
 use super::{fetch_task, TaskStatus};
 use super::{TaskContext, TaskControlBlock};
+use crate::mm::{MapPermission, VirtAddr};
 use crate::sync::UPSafeCell;
+use crate::syscall::TaskInfo;
+use crate::timer::get_time_ms;
 use crate::trap::TrapContext;
 use alloc::sync::Arc;
 use lazy_static::*;
@@ -92,6 +95,29 @@ pub fn current_user_token() -> usize {
     task.get_user_token()
 }
 
+/// increase syscall times on this task and record the timestamp of the first time
+pub fn record_task_syscall(syscall_id: usize) {
+    let current_task = current_task().unwrap();
+    let mut inner = current_task.inner_exclusive_access();
+
+    if inner.task_info.time == 0 {
+        inner.task_info.time = get_time_ms();
+    }
+    inner.task_info.syscall_times[syscall_id] += 1;
+}
+
+/// get the info of the current task
+pub fn get_task_info() -> TaskInfo {
+    let current_task = current_task().unwrap();
+    let current_task_info = &current_task.inner_exclusive_access().task_info;
+    
+    TaskInfo {
+        status: current_task_info.status,
+        syscall_times: current_task_info.syscall_times,
+        time: get_time_ms() - current_task_info.time, 
+    }
+}
+
 ///Get the mutable reference to trap context of current task
 pub fn current_trap_cx() -> &'static mut TrapContext {
     current_task()
@@ -108,4 +134,18 @@ pub fn schedule(switched_task_cx_ptr: *mut TaskContext) {
     unsafe {
         __switch(switched_task_cx_ptr, idle_task_cx_ptr);
     }
+}
+
+/// insert framed area to current user space.
+pub fn current_task_insert_framed_area(start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) {
+    let current_task = current_task().unwrap();
+    let mut inner = current_task.inner_exclusive_access();
+    inner.memory_set.insert_framed_area(start_va, end_va, permission);
+}
+
+/// remove framed area from current user space.
+pub fn current_task_remove_framed_area(start_va: VirtAddr, end_va: VirtAddr) {
+    let current_task = current_task().unwrap();
+    let mut inner = current_task.inner_exclusive_access();
+    inner.memory_set.remove_framed_area(start_va, end_va);
 }
