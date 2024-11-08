@@ -5,9 +5,11 @@ use super::{
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use log::debug;
 use spin::{Mutex, MutexGuard};
 /// Virtual filesystem layer over easy-fs
 pub struct Inode {
+    inode_id: u32,
     block_id: usize,
     block_offset: usize,
     fs: Arc<Mutex<EasyFileSystem>>,
@@ -17,17 +19,31 @@ pub struct Inode {
 impl Inode {
     /// Create a vfs inode
     pub fn new(
+        inode_id: u32,
         block_id: u32,
         block_offset: usize,
         fs: Arc<Mutex<EasyFileSystem>>,
         block_device: Arc<dyn BlockDevice>,
     ) -> Self {
         Self {
+            inode_id,
             block_id: block_id as usize,
             block_offset,
             fs,
             block_device,
         }
+    }
+    /// the id of the inode
+    pub fn get_inode_id(&self) -> u32 {
+        self.inode_id
+    }
+    /// check if the file is a directory
+    pub fn is_dir(&self) -> bool {
+        self.read_disk_inode(|disk_inode| disk_inode.is_dir())
+    }
+    /// get the number of links of the disk-inode
+    pub fn get_nlink(&self) -> u32 {
+        self.read_disk_inode(|disk_inode| disk_inode.nlink)
     }
     /// Call a function over a disk inode to read it
     fn read_disk_inode<V>(&self, f: impl FnOnce(&DiskInode) -> V) -> V {
@@ -65,6 +81,7 @@ impl Inode {
             self.find_inode_id(name, disk_inode).map(|inode_id| {
                 let (block_id, block_offset) = fs.get_disk_inode_pos(inode_id);
                 Arc::new(Self::new(
+                    inode_id,
                     block_id,
                     block_offset,
                     self.fs.clone(),
@@ -72,6 +89,76 @@ impl Inode {
                 ))
             })
         })
+    }
+    /// Hard link a file
+    pub fn linkat(&self, old_name: &str, new_name: &str) {
+        debug!("linkat {} to {}", old_name, new_name);
+        let mut old_file_inode_id = None;
+        self.read_disk_inode(|disk_inode| {
+            self.find_inode_id(old_name, disk_inode).map(|x| {
+                old_file_inode_id = Some(x);
+            })
+        });
+        let old_file_inode_id = old_file_inode_id.unwrap();
+        debug!("found inode {}", old_file_inode_id);
+        // do not create a new inode, insert a new DirEntry and set its inode_id to old_file_inode
+        self.modify_disk_inode(|root_inode| {
+            let mut fs = self.fs.lock();
+
+            // append file in the dirent
+            let file_count = (root_inode.size as usize) / DIRENT_SZ;
+            let new_size = (file_count + 1) * DIRENT_SZ;
+            // increase size
+            self.increase_size(new_size as u32, root_inode, &mut fs);
+            // write dirent
+            let dirent = DirEntry::new(new_name, old_file_inode_id);
+            root_inode.write_at(
+                file_count * DIRENT_SZ,
+                dirent.as_bytes(),
+                &self.block_device,
+            );
+            debug!("created new file {} link to inode {}", new_name, old_file_inode_id);
+
+            // increase nlink of the file
+            let (old_file_block_id, old_file_block_offset) = fs.get_disk_inode_pos(old_file_inode_id);
+            let old_file_inode = Self::new(old_file_inode_id, old_file_block_id, old_file_block_offset, 
+                self.fs.clone(), self.block_device.clone());
+            old_file_inode.modify_disk_inode(|old_file_disk_inode| {
+                old_file_disk_inode.nlink += 1;
+                debug!("link {} to {}, inode id {} nlink = {}", old_name, new_name, old_file_inode_id, old_file_disk_inode.nlink);
+            });
+        });
+        debug!("link done, sync cache");
+
+        block_cache_sync_all();
+    }
+    /// unlink a file
+    pub fn unlink(&self, name: &str) {
+        debug!("unlink {name}");
+        let file_inode = self.find(name).unwrap();
+        let mut should_delete_inode = false;
+        file_inode.modify_disk_inode(|file_disk_inode| {
+            debug!("unlink file {} inode {}, nlink before unlink = {}", name, file_inode.get_inode_id(), file_disk_inode.nlink);
+            if file_disk_inode.nlink == 0 {
+                return;
+            }
+            file_disk_inode.nlink -= 1;
+            if file_disk_inode.nlink == 0 {
+                should_delete_inode = true;
+            }
+        });
+
+        if should_delete_inode {
+            debug!("nlink == 0, delete file and its data");
+            file_inode.clear();
+
+            // remove file info from its parent dir
+            self.modify_disk_inode(|disk_inode| {
+                disk_inode.write_at((file_inode.get_inode_id() + 2) as usize * DIRENT_SZ, DirEntry::empty().as_bytes(), &self.block_device);
+            });
+        }
+
+        block_cache_sync_all();
     }
     /// Increase the size of a disk inode
     fn increase_size(
@@ -131,6 +218,7 @@ impl Inode {
         block_cache_sync_all();
         // return inode
         Some(Arc::new(Self::new(
+            new_inode_id,
             block_id,
             block_offset,
             self.fs.clone(),

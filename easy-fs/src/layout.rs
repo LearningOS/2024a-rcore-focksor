@@ -1,6 +1,7 @@
 use super::{get_block_cache, BlockDevice, BLOCK_SZ};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use log::debug;
 use core::fmt::{Debug, Formatter, Result};
 
 /// Magic number for sanity check
@@ -81,6 +82,7 @@ type DataBlock = [u8; BLOCK_SZ];
 /// A disk inode
 #[repr(C)]
 pub struct DiskInode {
+    pub nlink: u32,
     pub size: u32,
     pub direct: [u32; INODE_DIRECT_COUNT],
     pub indirect1: u32,
@@ -92,6 +94,7 @@ impl DiskInode {
     /// Initialize a disk inode, as well as all direct inodes under it
     /// indirect1 and indirect2 block are allocated only when they are needed
     pub fn initialize(&mut self, type_: DiskInodeType) {
+        self.nlink = 1;
         self.size = 0;
         self.direct.iter_mut().for_each(|v| *v = 0);
         self.indirect1 = 0;
@@ -315,6 +318,7 @@ impl DiskInode {
         buf: &mut [u8],
         block_device: &Arc<dyn BlockDevice>,
     ) -> usize {
+        debug!("read_at {}", offset);
         let mut start = offset;
         let end = (offset + buf.len()).min(self.size as usize);
         if start >= end {
@@ -356,6 +360,7 @@ impl DiskInode {
         buf: &[u8],
         block_device: &Arc<dyn BlockDevice>,
     ) -> usize {
+        debug!("write_at {}", offset);
         let mut start = offset;
         let end = (offset + buf.len()).min(self.size as usize);
         assert!(start <= end);
