@@ -8,7 +8,7 @@ use crate::{
     fs::{open_file, OpenFlags},
     mm::{translated_refmut, translated_str},
     task::{
-        add_task, current_task, current_user_token, exit_current_and_run_next, suspend_current_and_run_next, TaskControlBlock, TaskStatus
+        add_task, current_task, current_user_token, exit_current_and_run_next, suspend_current_and_run_next, TaskStatus
     }, timer::get_time_us,
 };
 use crate::mm::StepByOne;
@@ -222,20 +222,14 @@ pub fn sys_sbrk(size: i32) -> isize {
 
 /// YOUR JOB: Implement spawn.
 /// HINT: fork + exec =/= spawn
-pub fn sys_spawn(_path: *const u8) -> isize {
+pub fn sys_spawn(path: *const u8) -> isize {
     let token = current_user_token();
-    let path = translated_str(token, _path);
-    let parent = current_task().unwrap();
-    let mut parent_inner = parent.inner_exclusive_access();
+    let path = translated_str(token, path);
     if let Some(app_inode) = open_file(path.as_str(), OpenFlags::RDONLY) {
-        let all_data = app_inode.read_all();
-        let task = Arc::new(TaskControlBlock::new(all_data.as_slice()));
-        task.inner_exclusive_access().parent = Some(Arc::downgrade(&parent));
-        parent_inner.children.push(task.clone());
+        let task = current_task().unwrap().exec_child(app_inode.read_all().as_slice());
         add_task(task.clone());
         task.pid.0 as isize
     } else {
-        error!("spawn: app {} not found!", path);
         -1
     }
 }

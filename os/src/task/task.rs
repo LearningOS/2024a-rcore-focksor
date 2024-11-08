@@ -1,5 +1,5 @@
 //! Types related to task management & Functions for completely changing TCB
-use super::TaskContext;
+use super::{current_task, TaskContext};
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
 use crate::config::{MAX_SYSCALL_NUM, TRAP_CONTEXT_BASE};
 use crate::fs::{File, Stdin, Stdout};
@@ -192,6 +192,15 @@ impl TaskControlBlock {
         );
         *inner.get_trap_cx() = trap_cx;
         // **** release current PCB
+    }
+
+    /// Load a new elf and run as the current task's child process.
+    pub fn exec_child(&self, elf_data: &[u8]) -> Arc<TaskControlBlock> {
+        let current_task = current_task().unwrap();
+        let child_task = Arc::new(TaskControlBlock::new(&elf_data));
+        current_task.inner_exclusive_access().children.push(child_task.clone());
+        child_task.inner_exclusive_access().parent = Some(Arc::downgrade(&current_task));
+        child_task
     }
 
     /// parent process fork the child process
