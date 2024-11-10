@@ -49,6 +49,8 @@ pub struct ProcessControlBlockInner {
     pub semaphore_list: Vec<Option<Arc<Semaphore>>>,
     /// condvar list
     pub condvar_list: Vec<Option<Arc<Condvar>>>,
+    /// the lock banker of the process
+    pub lock_banker: LockBanker,
 }
 
 impl ProcessControlBlockInner {
@@ -119,6 +121,7 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+                    lock_banker: LockBanker::new(),
                 })
             },
         });
@@ -245,6 +248,7 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+                    lock_banker: LockBanker::new(),
                 })
             },
         });
@@ -281,5 +285,127 @@ impl ProcessControlBlock {
     /// get pid
     pub fn getpid(&self) -> usize {
         self.pid.0
+    }
+}
+/// lock type enum
+pub enum LockType {
+    /// lock type: mutex
+    Mutex = 0,
+    /// lock type: semaphore
+    Semaphore = 1,
+}
+/// lock banker
+pub struct LockBanker {
+    /// enable detected
+    pub enable_detect: bool,
+    /// available resource
+    pub available: Vec<isize>,
+    /// allocation
+    pub allocation: Vec<Vec<isize>>,
+    /// need resource
+    pub need: Vec<Vec<isize>>,
+}
+impl LockBanker {
+    /// a new lock banker
+    pub fn new() -> Self {
+        let mut new = Self {
+            enable_detect: false,
+            available: Vec::new(),
+            allocation: Vec::new(),
+            need: Vec::new(),
+        };
+        new.available.resize(2, 0);
+        new.allocation.push(vec![0, 0]);
+        new.need.push(vec![0, 0]);
+        new
+    }
+    /// add a lock resource
+    pub fn add_available(&mut self, lock_type: LockType, count: usize, lock_id: usize) {
+        let lock_type = lock_type as usize;
+        debug!("add available type {} count {} id {}", lock_type, count, lock_id);
+        let lock_type = lock_type + lock_id - 1;
+        if lock_type >= self.available.len() {
+            debug!("new type {}, current len {}", lock_type, self.available.len());
+            self.available.resize(lock_type + 1, 0);
+            debug!("available resize to {}", self.available.len());
+            for i in self.allocation.iter_mut() {
+                i.resize(lock_type + 1, 0);
+            }
+            for i in self.need.iter_mut() {
+                i.resize(lock_type + 1, 0);
+            }
+        }
+        self.available[lock_type] += count as isize;
+        debug!("added a lock type {} count {}, available: {}", lock_type, count, self.available[lock_type]);
+    }
+    /// add a lock usage record
+    pub fn record_lock(&mut self, thread_id: usize, lock_type: LockType, lock_id: usize) -> bool {
+        let lock_type = lock_type as usize + lock_id - 1;
+        debug!("record a lock, thread_id {}, type {}", thread_id, lock_type);
+        if thread_id > self.allocation.len() - 1 {
+            for _ in (self.allocation.len() - 1)..thread_id {
+                self.allocation.push(vec![0; self.available.len()]);
+                self.need.push(vec![0; self.available.len()]);
+            }
+            debug!("new thread id {}, new threads len is {}", thread_id, self.allocation.len());
+        }
+        self.need[thread_id][lock_type] = 1;
+        debug!("deadlock detect enable: {}", self.enable_detect);
+        let ret = match self.enable_detect {
+            true => self.detect(lock_type),
+            false => true,
+        };
+        debug!("deadlock detect pass: {}", ret);
+        if ret {
+            self.allocation[thread_id][lock_type] += 1;
+            self.available[lock_type] -= 1;
+            debug!("type {} available {} thread {} allocation {}",
+                   lock_type, self.available[lock_type], 
+                   thread_id, self.allocation[thread_id][lock_type]);
+        }
+        self.need[thread_id][lock_type] = 0;
+        ret
+    }
+    /// remove a lock usage record
+    pub fn record_unlock(&mut self, thread_id: usize, lock_type: LockType, lock_id: usize) {
+        let lock_type = lock_type as usize + lock_id - 1;
+        self.allocation[thread_id][lock_type] -= 1;
+        self.available[lock_type] += 1;
+        debug!("record a unlock, thread_id {}, type {}, allocation {}", 
+                thread_id, lock_type, self.allocation[thread_id][lock_type])
+    }
+    /// detect deadlock
+    pub fn detect(&mut self, lock_type: usize) -> bool {
+        debug!("detect deadlock type {} available {}", lock_type, self.available[lock_type]);
+        let mut work = self.available.clone();
+        let mut finish = vec![false; self.allocation.len()];
+
+        loop {
+            debug!("finish: {:?}", finish);
+            let mut flag = true;
+            for (thread_id, finished) in finish.iter_mut().enumerate() {
+                let need = self.need[thread_id][lock_type];
+                let available = work[lock_type];
+                debug!("thread {} finish {}, need {}, lock type {} available {}, allocation {}", 
+                    *finished, thread_id, need, lock_type, available, self.allocation[thread_id][lock_type]);
+                if !*finished && need <= available {
+                    flag = false;
+                    work[lock_type] += self.allocation[thread_id][lock_type];
+                    *finished = true;
+                    debug!("thread {} finish true", thread_id);
+                }
+            }
+            if flag {
+                break;
+            }
+        }
+        debug!("finish: {:?}", finish);
+        finish.iter().all(|&x| x)
+    }
+    /// remove a thread
+    pub fn remove_thread(&mut self, thread_id: usize) {
+        if thread_id < self.allocation.len() {
+            self.need[thread_id] = vec![0, 0];
+        }
     }
 }
