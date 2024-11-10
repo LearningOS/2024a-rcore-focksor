@@ -349,7 +349,7 @@ impl LockBanker {
             }
             debug!("new thread id {}, new threads len is {}", thread_id, self.allocation.len());
         }
-        self.need[thread_id][lock_type] = 1;
+        self.need[thread_id][lock_type] += 1;
         debug!("deadlock detect enable: {}", self.enable_detect);
         let ret = match self.enable_detect {
             true => self.detect(lock_type),
@@ -358,19 +358,16 @@ impl LockBanker {
         debug!("deadlock detect pass: {}", ret);
         if ret {
             self.allocation[thread_id][lock_type] += 1;
-            self.available[lock_type] -= 1;
             debug!("type {} available {} thread {} allocation {}",
                    lock_type, self.available[lock_type], 
                    thread_id, self.allocation[thread_id][lock_type]);
         }
-        self.need[thread_id][lock_type] = 0;
         ret
     }
     /// remove a lock usage record
     pub fn record_unlock(&mut self, thread_id: usize, lock_type: LockType, lock_id: usize) {
         let lock_type = lock_type as usize + lock_id - 1;
         self.allocation[thread_id][lock_type] -= 1;
-        self.available[lock_type] += 1;
         debug!("record a unlock, thread_id {}, type {}, allocation {}", 
                 thread_id, lock_type, self.allocation[thread_id][lock_type])
     }
@@ -391,6 +388,7 @@ impl LockBanker {
                 if !*finished && need <= available {
                     flag = false;
                     work[lock_type] += self.allocation[thread_id][lock_type];
+                    work[lock_type] -= need;
                     *finished = true;
                     debug!("thread {} finish true", thread_id);
                 }
